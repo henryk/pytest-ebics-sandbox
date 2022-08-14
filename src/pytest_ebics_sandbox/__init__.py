@@ -81,7 +81,7 @@ class EbicsSandbox:
         self._container = self.docker_client.containers.run(
             SANDBOX_IMAGE,
             detach=True,
-            auto_remove=False,
+            auto_remove=True,
             environment={
                 "LIBEUFIN_SANDBOX_ADMIN_PASSWORD": self.admin_credentials.password,
                 "LIBEUFIN_SANDBOX_DB_CONNECTION": "jdbc:sqlite:/data/libeufindb.sqlite3",
