@@ -58,10 +58,12 @@ class EbicsSandbox:
         return self._docker_client
 
     def ping(self):
+        self._ensure_started()
         response = self._session.get(self.base_url)
         return response.status_code == 200 and "this is the Sandbox" in response.text
 
     def rotate_keys(self):
+        self._ensure_started()
         response = self._session.post(
             urljoin(self.base_url, f"/admin/ebics/hosts/{self.ebics_host}/rotate-keys")
         )
@@ -109,6 +111,7 @@ class EbicsSandbox:
             self._container = None
 
     def new_subscriber(self) -> "EbicsSandboxSubscriber":
+        self._ensure_started()
         retval = EbicsSandboxSubscriber(self)
         response = self._session.post(
             urljoin(self.base_url, f"admin/ebics/subscribers"),
