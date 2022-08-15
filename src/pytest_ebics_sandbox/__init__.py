@@ -1,6 +1,8 @@
 import time
 from collections import namedtuple
 from contextlib import suppress
+from copy import deepcopy
+from typing import Optional
 from urllib.parse import urljoin
 from uuid import uuid4
 
@@ -11,14 +13,45 @@ from docker.errors import NotFound
 from requests.exceptions import ConnectionError
 from urllib3.exceptions import ProtocolError
 
-SANDBOX_IMAGE = "ghcr.io/henryk/libeufin/sandbox:latest"
+DEFAULT_SANDBOX_DOCKER_CONFIGURATION = {
+    "auto_remove": True,
+    "tmpfs": {"/data": ""},
+    "ports": {"5002/tcp": None},
+    "environment": {
+        "LIBEUFIN_SANDBOX_DB_CONNECTION": "jdbc:sqlite:/data/libeufindb.sqlite3",
+    },
+}
+DEFAULT_EBICS_SANDBOX_SETTINGS = {
+    "ebics_version": "3.0",
+    "sandbox_image": "ghcr.io/henryk/libeufin/sandbox:latest",
+    "admin_password": "hunter2",
+}
+
 
 Credentials = namedtuple("Credentials", ("username", "password"))
 
 
 class EbicsSandbox:
-    def __init__(self):
-        self.admin_credentials = Credentials("admin", "hunter2")
+    def __init__(
+        self,
+        /,
+        sandbox_settings: Optional[dict] = None,
+        docker_configuration: Optional[dict] = None,
+    ):
+        self._docker_configuration = (
+            docker_configuration
+            if docker_configuration is not None
+            else DEFAULT_SANDBOX_DOCKER_CONFIGURATION
+        )
+        self._sandbox_settings = (
+            sandbox_settings
+            if sandbox_settings is not None
+            else DEFAULT_EBICS_SANDBOX_SETTINGS
+        )
+
+        self.admin_credentials = Credentials(
+            "admin", self._sandbox_settings["admin_password"]
+        )
         self.ebics_host = str(uuid4())
 
         self._docker_client = None
@@ -38,7 +71,10 @@ class EbicsSandbox:
 
             response = self._session.post(
                 urljoin(self.base_url, "/admin/ebics/hosts"),
-                json={"hostID": self.ebics_host, "ebicsVersion": "3.0"},
+                json={
+                    "hostID": self.ebics_host,
+                    "ebicsVersion": self._sandbox_settings["ebics_version"],
+                },
             )
             response.raise_for_status()
 
@@ -80,16 +116,15 @@ class EbicsSandbox:
         self.cleanup()
 
     def start_container(self):
-        self._container = self.docker_client.containers.run(
-            SANDBOX_IMAGE,
+        args = dict(
+            self._docker_configuration,
             detach=True,
-            auto_remove=True,
-            environment={
-                "LIBEUFIN_SANDBOX_ADMIN_PASSWORD": self.admin_credentials.password,
-                "LIBEUFIN_SANDBOX_DB_CONNECTION": "jdbc:sqlite:/data/libeufindb.sqlite3",
-            },
-            tmpfs={"/data": ""},
-            ports={"5002/tcp": None},
+        )
+        args["environment"] = args.get("environment", {}) | {
+            "LIBEUFIN_SANDBOX_ADMIN_PASSWORD": self.admin_credentials.password,
+        }
+        self._container = self.docker_client.containers.run(
+            self._sandbox_settings["sandbox_image"], **args
         )
 
         while self._container.status == "created":
@@ -134,6 +169,21 @@ class EbicsSandboxSubscriber:
 
 
 @pytest.fixture(scope="session")
-def ebics_sandbox() -> EbicsSandbox:
-    with EbicsSandbox() as sandbox:
+def ebics_sandbox_docker_configuration():
+    return deepcopy(DEFAULT_SANDBOX_DOCKER_CONFIGURATION)
+
+
+@pytest.fixture(scope="session")
+def ebics_sandbox_settings():
+    return deepcopy(DEFAULT_EBICS_SANDBOX_SETTINGS)
+
+
+@pytest.fixture(scope="session")
+def ebics_sandbox(
+    ebics_sandbox_settings, ebics_sandbox_docker_configuration
+) -> EbicsSandbox:
+    with EbicsSandbox(
+        sandbox_settings=ebics_sandbox_settings,
+        docker_configuration=ebics_sandbox_docker_configuration,
+    ) as sandbox:
         yield sandbox
